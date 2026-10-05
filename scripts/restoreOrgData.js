@@ -377,11 +377,38 @@ async function restoreOrgData() {
         memberRefs: [adibaBushra._id, yussraKhan._id, ...techMemberIds],
         displayOrder: 6,
         status: 'Active'
+      },
+      {
+        communityId: COMMUNITY_ID,
+        name: 'Media Team',
+        icon: 'Camera',
+        description: 'Captures photos and videos of chapter events, produces visual content, and documents the campus body journey.',
+        memberRefs: [],
+        displayOrder: 7,
+        status: 'Active'
+      },
+      {
+        communityId: COMMUNITY_ID,
+        name: 'Editorial Team',
+        icon: 'PenTool',
+        description: 'Writes articles, newsletters, and announcements, and ensures quality and consistency of all published content.',
+        memberRefs: [],
+        displayOrder: 8,
+        status: 'Active'
+      },
+      {
+        communityId: COMMUNITY_ID,
+        name: 'Data & Form Team',
+        icon: 'Database',
+        description: 'Builds registration forms, manages event data, and handles analytics and reporting for chapter initiatives.',
+        memberRefs: [],
+        displayOrder: 9,
+        status: 'Active'
       }
     ];
 
     await Team.insertMany(restoredTeams);
-    console.log('✓ All 6 original teams and leadership hierarchy successfully restored in MongoDB.');
+    console.log('✓ All 9 teams and leadership hierarchy successfully restored in MongoDB.');
 
     console.log('\n[Restore] SUCCESS! Organizational structure reconnected without touching user accounts.');
     process.exit(0);

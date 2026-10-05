@@ -215,6 +215,9 @@ exports.updateMembership = async (req, res) => {
         else if (role.startsWith('PR')) member.teamName = 'PR';
         else if (role.startsWith('Design')) member.teamName = 'Design';
         else if (role.startsWith('Social Media')) member.teamName = 'Social Media';
+        else if (role.startsWith('Media')) member.teamName = 'Media Team';
+        else if (role.startsWith('Editorial')) member.teamName = 'Editorial Team';
+        else if (role.startsWith('Data & Form')) member.teamName = 'Data & Form Team';
         else if (role.startsWith('Community')) member.teamName = 'Community';
         else if (role === 'Campus Mantri') member.teamName = 'Leadership';
         else if (role === 'Faculty Coordinator') member.teamName = 'Faculty';
