@@ -24,6 +24,7 @@ const postRoutes = require('./routes/postRoutes');
 const leaderboardRoutes = require('./routes/leaderboardRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const registrationRoutes = require('./routes/registrationRoutes');
 
 const app = express();
 
@@ -103,6 +104,7 @@ app.use('/api/posts', postRoutes);
 app.use('/api/leaderboard', leaderboardRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/registration', registrationRoutes);
 
 // Global Error Handler
 app.use((err, req, res, next) => {
