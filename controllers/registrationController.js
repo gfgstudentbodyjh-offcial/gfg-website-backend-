@@ -60,7 +60,7 @@ exports.createRegistration = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid Team Leader email address.' });
     }
 
-    // 3. Dynamic members validation
+    // Dynamic members validation
     const expectedAdditionalMembers = parsedSize - 1;
     const cleanMembers = Array.isArray(members) ? members.slice(0, expectedAdditionalMembers) : [];
 
@@ -70,6 +70,13 @@ exports.createRegistration = async (req, res) => {
         message: `For a team size of ${parsedSize}, exactly ${expectedAdditionalMembers} additional members must be provided.`
       });
     }
+
+    const cleanLeaderEmail = leader.email.trim().toLowerCase();
+    const cleanLeaderMobile = leader.mobile.trim();
+
+    // 3. Intra-team email uniqueness validation (Prevents Google Apps Script rejection)
+    const emailMap = new Map();
+    emailMap.set(cleanLeaderEmail, 'Team Leader');
 
     for (let i = 0; i < cleanMembers.length; i++) {
       const m = cleanMembers[i];
@@ -86,6 +93,15 @@ exports.createRegistration = async (req, res) => {
       if (!m.department || !m.department.trim()) {
         return res.status(400).json({ success: false, message: `Department is required for Member ${memberNumber}.` });
       }
+
+      const memEmail = m.email.trim().toLowerCase();
+      if (emailMap.has(memEmail)) {
+        return res.status(400).json({
+          success: false,
+          message: `Each team member must have a unique email address. "${memEmail}" is entered for both ${emailMap.get(memEmail)} and Member ${memberNumber}.`
+        });
+      }
+      emailMap.set(memEmail, `Member ${memberNumber}`);
     }
 
     // Format member array with memberIndex
@@ -108,16 +124,88 @@ exports.createRegistration = async (req, res) => {
       });
     }
 
-    // 5. Generate unique registration ID and save
-    let registrationId = generateRegId();
+    // 5. Synchronize with Google Sheets Web App FIRST if configured (Two-phase reliable write)
+    let sheetsRegistrationId = null;
+    let sheetsSyncSuccess = false;
+    let sheetsSyncError = null;
+
+    if (process.env.GOOGLE_SHEETS_SCRIPT_URL) {
+      try {
+        const sheetsPayload = {
+          teamName: teamName.trim(),
+          memberCount: parsedSize,
+          category,
+          mentorName: facultyMentor.trim(),
+          leader: {
+            name: leader.name.trim(),
+            email: cleanLeaderEmail,
+            mobile: cleanLeaderMobile,
+            department: leader.department.trim()
+          },
+          members: formattedMembers.map((m) => ({
+            name: m.name,
+            email: m.email,
+            mobile: m.mobile,
+            department: m.department
+          }))
+        };
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
+
+        const sheetsResp = await fetch(process.env.GOOGLE_SHEETS_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          redirect: 'follow',
+          body: JSON.stringify(sheetsPayload),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (!sheetsResp.ok) {
+          const errText = await sheetsResp.text();
+          throw new Error(`Google Sheets responded with HTTP ${sheetsResp.status}: ${errText.substring(0, 100)}`);
+        }
+
+        const sheetsData = await sheetsResp.json();
+        if (!sheetsData || !sheetsData.success) {
+          const failureReason = sheetsData?.message || 'Google Sheets rejected the registration submission.';
+          console.error('[Google Sheets Sync Rejected]:', failureReason);
+          return res.status(422).json({
+            success: false,
+            message: failureReason
+          });
+        }
+
+        sheetsRegistrationId = sheetsData.registrationId;
+        sheetsSyncSuccess = true;
+        console.log(`[Google Sheets] Successfully confirmed persistence for team "${teamName.trim()}": ${sheetsRegistrationId}`);
+      } catch (sheetsErr) {
+        sheetsSyncError = sheetsErr.message;
+        console.error('[Google Sheets Write Failure]:', sheetsErr);
+        // Do NOT report false success if Google Sheets write failed
+        return res.status(502).json({
+          success: false,
+          message: `Unable to persist registration in official records: ${sheetsErr.name === 'AbortError' ? 'Google Sheets service timed out. Please try again.' : sheetsErr.message}`
+        });
+      }
+    }
+
+    // 6. Generate stable registration ID (use Google Sheets ID if available, otherwise generate fallback)
+    let registrationId = sheetsRegistrationId || generateRegId();
     let collision = await EventRegistration.findOne({ registrationId });
-    while (collision) {
+    while (collision && !sheetsRegistrationId) {
       registrationId = generateRegId();
       collision = await EventRegistration.findOne({ registrationId });
     }
 
+    // 7. Persist to MongoDB Database
     const newRegistration = new EventRegistration({
       registrationId,
+      sheetsRegistrationId: sheetsRegistrationId || null,
+      sheetsSyncStatus: sheetsSyncSuccess ? 'Synced' : 'Failed',
+      sheetsSyncError: sheetsSyncError || null,
+      sheetsSyncedAt: sheetsSyncSuccess ? new Date() : null,
       eventName: eventName || 'THINKTANK IDEATHON 2026',
       teamName: teamName.trim(),
       teamSize: parsedSize,
@@ -125,8 +213,8 @@ exports.createRegistration = async (req, res) => {
       facultyMentor: facultyMentor.trim(),
       leader: {
         name: leader.name.trim(),
-        email: leader.email.trim().toLowerCase(),
-        mobile: leader.mobile.trim(),
+        email: cleanLeaderEmail,
+        mobile: cleanLeaderMobile,
         department: leader.department.trim()
       },
       members: formattedMembers,
@@ -134,34 +222,6 @@ exports.createRegistration = async (req, res) => {
     });
 
     const saved = await newRegistration.save();
-
-    // Optional: Synchronize with Google Sheets Web App if configured
-    if (process.env.GOOGLE_SHEETS_SCRIPT_URL) {
-      try {
-        const sheetsResp = await fetch(process.env.GOOGLE_SHEETS_SCRIPT_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          redirect: 'follow',
-          body: JSON.stringify({
-            teamName: saved.teamName,
-            memberCount: saved.teamSize,
-            category: saved.category,
-            mentorName: saved.facultyMentor,
-            leader: saved.leader,
-            members: saved.members.map((m) => ({
-              name: m.name,
-              email: m.email,
-              mobile: m.mobile,
-              department: m.department
-            }))
-          })
-        });
-        const sheetsText = await sheetsResp.text();
-        console.log(`[Google Sheets] Synced registration "${saved.registrationId}":`, sheetsText.substring(0, 150));
-      } catch (sheetsErr) {
-        console.warn('[Google Sheets Sync Error]:', sheetsErr.message);
-      }
-    }
 
     return res.status(201).json({
       success: true,
@@ -190,6 +250,136 @@ exports.getRegistrationById = async (req, res) => {
     }
 
     return res.json({ success: true, data: registration });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/registration/:id/sync (Retry syncing a specific registration to Google Sheets)
+exports.syncRegistration = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const registration = await EventRegistration.findOne({
+      $or: [{ registrationId: id }, { _id: id.match(/^[0-9a-fA-F]{24}$/) ? id : null }]
+    });
+
+    if (!registration) {
+      return res.status(404).json({ success: false, message: 'Registration record not found.' });
+    }
+
+    if (!process.env.GOOGLE_SHEETS_SCRIPT_URL) {
+      return res.status(503).json({ success: false, message: 'Google Sheets sync URL not configured.' });
+    }
+
+    // Intra-team email validation check
+    const emails = [registration.leader.email.trim().toLowerCase(), ...registration.members.map(m => m.email.trim().toLowerCase())];
+    const emailSet = new Set(emails);
+    if (emails.length !== emailSet.size) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot sync: Registration contains duplicate emails among members. Please correct member emails first.'
+      });
+    }
+
+    const sheetsPayload = {
+      teamName: registration.teamName,
+      memberCount: registration.teamSize,
+      category: registration.category,
+      mentorName: registration.facultyMentor,
+      leader: {
+        name: registration.leader.name,
+        email: registration.leader.email,
+        mobile: registration.leader.mobile,
+        department: registration.leader.department
+      },
+      members: registration.members.map(m => ({
+        name: m.name,
+        email: m.email,
+        mobile: m.mobile,
+        department: m.department
+      }))
+    };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+    const sheetsResp = await fetch(process.env.GOOGLE_SHEETS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      redirect: 'follow',
+      body: JSON.stringify(sheetsPayload),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+
+    if (!sheetsResp.ok) {
+      throw new Error(`Google Sheets responded with HTTP ${sheetsResp.status}`);
+    }
+
+    const sheetsData = await sheetsResp.json();
+    if (!sheetsData || !sheetsData.success) {
+      registration.sheetsSyncStatus = 'Failed';
+      registration.sheetsSyncError = sheetsData?.message || 'Sync rejected by Google Sheets';
+      await registration.save();
+      return res.status(422).json({ success: false, message: registration.sheetsSyncError });
+    }
+
+    registration.sheetsRegistrationId = sheetsData.registrationId;
+    registration.sheetsSyncStatus = 'Synced';
+    registration.sheetsSyncError = null;
+    registration.sheetsSyncedAt = new Date();
+    await registration.save();
+
+    return res.json({
+      success: true,
+      message: `Successfully synchronized registration with Google Sheets: ${sheetsData.registrationId}`,
+      data: registration
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to synchronize with Google Sheets: ' + err.message
+    });
+  }
+};
+
+// GET /api/registration/audit/report (Integrity and discrepancy report)
+exports.getRegistrationAudit = async (req, res) => {
+  try {
+    const registrations = await EventRegistration.find().sort({ createdAt: -1 });
+
+    const audit = {
+      totalMongoRecords: registrations.length,
+      syncedWithSheets: registrations.filter(r => r.sheetsSyncStatus === 'Synced').length,
+      pendingOrFailed: registrations.filter(r => r.sheetsSyncStatus !== 'Synced').length,
+      duplicateEmailIssues: [],
+      memberCountIssues: []
+    };
+
+    registrations.forEach(r => {
+      const expectedMembers = (r.teamSize || 3) - 1;
+      const actualMembers = r.members ? r.members.length : 0;
+      if (expectedMembers !== actualMembers) {
+        audit.memberCountIssues.push({
+          teamName: r.teamName,
+          registrationId: r.registrationId,
+          expected: expectedMembers,
+          actual: actualMembers
+        });
+      }
+
+      const emails = [r.leader?.email, ...(r.members || []).map(m => m.email)].filter(Boolean).map(e => e.toLowerCase());
+      const emailSet = new Set(emails);
+      if (emails.length !== emailSet.size) {
+        audit.duplicateEmailIssues.push({
+          teamName: r.teamName,
+          registrationId: r.registrationId,
+          emails
+        });
+      }
+    });
+
+    return res.json({ success: true, data: audit });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

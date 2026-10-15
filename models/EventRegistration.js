@@ -56,6 +56,25 @@ const eventRegistrationSchema = new mongoose.Schema({
     type: String,
     enum: ['Confirmed', 'Pending Verification', 'Waitlisted', 'Cancelled'],
     default: 'Confirmed'
+  },
+  sheetsRegistrationId: {
+    type: String,
+    default: null,
+    index: true
+  },
+  sheetsSyncStatus: {
+    type: String,
+    enum: ['Synced', 'Failed', 'Pending'],
+    default: 'Pending',
+    index: true
+  },
+  sheetsSyncError: {
+    type: String,
+    default: null
+  },
+  sheetsSyncedAt: {
+    type: Date,
+    default: null
   }
 }, { timestamps: true });
 
