@@ -60,8 +60,15 @@ const signupLimiter = createRateLimiter({
   message: 'Too many account creation attempts from this IP. Please try again after 15 minutes.'
 });
 
+const passRetrievalLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // Max 20 retrieval requests per IP
+  message: 'Too many pass retrieval attempts from this IP. Please wait a few minutes before trying again.'
+});
+
 module.exports = {
   loginLimiter,
   signupLimiter,
+  passRetrievalLimiter,
   createRateLimiter
 };

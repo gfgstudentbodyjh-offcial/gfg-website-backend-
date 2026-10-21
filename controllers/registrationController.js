@@ -248,6 +248,118 @@ exports.createRegistration = async (req, res) => {
   }
 };
 
+// POST /api/registration/retrieve-pass
+// Secure pass retrieval using either Registration ID OR Team Leader Email
+exports.retrievePass = async (req, res) => {
+  try {
+    const { registrationId, leaderEmail, identifier } = req.body || {};
+
+    let cleanId = registrationId ? String(registrationId).trim().toUpperCase() : '';
+    let cleanEmail = leaderEmail ? String(leaderEmail).trim().toLowerCase() : '';
+
+    if (identifier && !cleanId && !cleanEmail) {
+      const raw = String(identifier).trim();
+      if (raw.includes('@')) {
+        cleanEmail = raw.toLowerCase();
+      } else {
+        cleanId = raw.toUpperCase();
+      }
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    // Validation — Required Field (400)
+    if (!cleanId && !cleanEmail) {
+      return res.status(400).json({
+        success: false,
+        title: 'Please Complete All Required Fields',
+        message: 'Enter your Registration Pass ID or Team Leader email address to continue.'
+      });
+    }
+
+    if (cleanEmail && !emailRegex.test(cleanEmail)) {
+      return res.status(400).json({
+        success: false,
+        title: 'Please Complete All Required Fields',
+        message: 'Please enter a valid Team Leader email address.'
+      });
+    }
+
+    // Option 1: Retrieval using Registration Pass ID
+    if (cleanId) {
+      const registration = await EventRegistration.findOne({
+        registrationId: cleanId
+      }).select('-__v -sheetsSyncError');
+
+      if (!registration) {
+        return res.status(404).json({
+          success: false,
+          title: 'Unable to Verify Registration',
+          message: "We couldn't verify your registration with the details provided. Check your Registration Pass ID, then try again."
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        title: 'Registration Verified',
+        message: 'Your team registration has been verified successfully. Your official confirmation pass is ready.',
+        multiple: false,
+        data: registration
+      });
+    }
+
+    // Option 2: Retrieval using Team Leader Email
+    if (cleanEmail) {
+      const escapedEmail = cleanEmail.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+      const registrations = await EventRegistration.find({
+        'leader.email': { $regex: new RegExp(`^${escapedEmail}$`, 'i') }
+      }).select('-__v -sheetsSyncError').sort({ createdAt: -1 });
+
+      if (!registrations || registrations.length === 0) {
+        return res.status(404).json({
+          success: false,
+          title: 'Unable to Verify Registration',
+          message: "We couldn't verify your registration with the details provided. Check the Team Leader's registered email address, then try again."
+        });
+      }
+
+      // Exactly 1 team found
+      if (registrations.length === 1) {
+        return res.status(200).json({
+          success: true,
+          title: 'Registration Verified',
+          message: 'Your team registration has been verified successfully. Your official confirmation pass is ready.',
+          multiple: false,
+          data: registrations[0]
+        });
+      }
+
+      // Multiple teams registered under this email
+      return res.status(200).json({
+        success: true,
+        title: 'Multiple Registrations Found',
+        message: `Found ${registrations.length} teams registered under this email. Please select a team to view its pass.`,
+        multiple: true,
+        teams: registrations.map((r) => ({
+          registrationId: r.registrationId,
+          teamName: r.teamName,
+          category: r.category,
+          teamSize: r.teamSize,
+          facultyMentor: r.facultyMentor,
+          createdAt: r.createdAt
+        })),
+        data: registrations
+      });
+    }
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      title: 'Something Went Wrong',
+      message: "We couldn't verify your registration right now. Please check your internet connection and try again."
+    });
+  }
+};
+
 // GET /api/registration/:id
 exports.getRegistrationById = async (req, res) => {
   try {
