@@ -10,9 +10,20 @@ const generateRegId = () => {
   return `GFG-${new Date().getFullYear()}-${code}`;
 };
 
+// Registration Status Flag for THINKTANK IDEATHON 2026
+const IS_REGISTRATION_OPEN = false;
+
 // POST /api/registration
 exports.createRegistration = async (req, res) => {
   try {
+    // Check if registration is closed
+    if (!IS_REGISTRATION_OPEN) {
+      return res.status(403).json({
+        success: false,
+        message: 'Registrations for THINKTANK IDEATHON 2026 are officially closed. Thank you for your interest!'
+      });
+    }
+
     const {
       eventName,
       teamName,
